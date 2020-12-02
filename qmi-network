@@ -18,12 +18,12 @@
 
 print_usage ()
 {
-    echo "usage: $0 [OPTIONS] [DEVICE] [COMMAND]"
+    echo "usage: $0 [OPTIONS] [COMMAND]"
 }
 
 help ()
 {
-    echo "Usage: qmi-network [OPTIONS] [DEVICE] [COMMAND]"
+    echo "Usage: qmi-network [OPTIONS] [COMMAND]"
     echo
     echo "Simple network management of QMI devices"
     echo
@@ -34,35 +34,32 @@ help ()
     echo
     echo "Options:"
     echo "  --profile=[PATH]  Use the profile in the specified path"
+    echo "  --device=[DEVICE] Full path to the cdc-wdm character device, e.g. /dev/cdc-wdm0"
     echo "  --help            Show help options"
     echo "  --version         Show version"
     echo
     echo "Notes:"
     echo
-    echo "   1) [DEVICE] is given as the full path to the cdc-wdm character"
-    echo "   device, e.g.:"
-    echo "      /dev/cdc-wdm0"
-    echo
-    echo "   2) The qmi-network script requires a profile to work. Unless"
+    echo "   1) The qmi-network script requires a profile to work. Unless"
     echo "   explicitly specified with \`--profile', the file is assumed to"
     echo "   be available in the following path:"
-    echo "      /etc/qmi-network.conf"
+    echo "      /var/local/gprs/qmi-network.conf"
     echo
-    echo "   3) The APN to use should be configured in the profile, in the"
+    echo "   2) The APN to use should be configured in the profile, in the"
     echo "   following way (e.g. assuming APN is called 'internet'):"
     echo "      APN=internet"
     echo
-    echo "   4) Optional APN user/password strings may be given in the following"
+    echo "   3) Optional APN user/password strings may be given in the following"
     echo "   way:"
     echo "      APN_USER=user"
     echo "      APN_PASS=password"
     echo
-    echo "   5) If you want to instruct the qmi-network script to use the"
+    echo "   4) If you want to instruct the qmi-network script to use the"
     echo "   qmi-proxy setup, you can do so by configuring the following line"
     echo "   in the profile:"
     echo "      PROXY=yes"
     echo
-    echo "   6) Once the qmi-network script reports a successful connection"
+    echo "   5) Once the qmi-network script reports a successful connection"
     echo "   you still need to run a DHCP client on the associated WWAN network"
     echo "   interface."
     echo
@@ -79,7 +76,7 @@ version ()
 }
 
 # Basic options
-if [ $# -lt 2 ]; then
+if [ $# -lt 1 ]; then
     if [ "$1" = "--help" ]; then
         help
         exit 0
@@ -94,10 +91,10 @@ if [ $# -lt 2 ]; then
 fi
 
 # Defaults
-PROFILE_FILE=/etc/qmi-network.conf
+PROFILE_FILE=/var/local/gprs/qmi-network.conf
 
 # Device + Command with options; options given first
-while [ $# -gt 2 ]; do
+while [ $# -gt 1 ]; do
     OPT="$1"
     shift
 
@@ -114,6 +111,8 @@ while [ $# -gt 2 ]; do
             ;;
         "--profile="*)
             PROFILE_FILE="${OPT#*=}";;
+        "--device="*)
+            DEVICE="${OPT#*=}";;
         *)
             echo >&2 "Invalid option: $OPT"
             print_usage
@@ -127,15 +126,23 @@ if [ -z "$PROFILE_FILE" ]; then
     exit 255
 fi
 
-if [ $# -ne 2 ] || [ "$1" = '--*' ] || [ "$2" = '--*' ]; then
+if [ $# -ne 1 ] || [ "$1" = '--*' ] || [ "$2" = '--*' ]; then
     echo "error: missing arguments" 1>&2
     print_usage
     exit 255
 fi
 
-DEVICE=$1
-COMMAND=$2
+# Detect device interface if not specified on the command line
+if [ -z "${DEVICE}" ]; then
+    for i in $(seq 0 10); do
+        if [ -e "/dev/cdc-wdm${i}" ]; then
+            DEVICE="/dev/cdc-wdm${i}"
+            break;
+        fi
+    done
+fi
 
+COMMAND=$1
 STATE_FILE=/tmp/qmi-network-state-`basename $DEVICE`
 
 load_profile ()
@@ -226,7 +233,7 @@ setup_data_format ()
     echo "Checking data format with '$DEVICE_DATA_FORMAT_CMD'..."
     if [ -n "$QMIDEBUG" ]; then
         DEVICE_DATA_FORMAT_OUT="\
-[/dev/cdc-wdm1] Successfully got data format
+[$DEVICE] Successfully got data format
                    QoS flow header: no
                Link layer protocol: '802-3'
   Uplink data aggregation protocol: 'disabled'
@@ -285,7 +292,7 @@ Downlink data aggregation max size: '0'"
         echo "Updating device link layer protocol with '$DEVICE_DATA_FORMAT_SET_CMD'..."
         if [ -n "$QMIDEBUG" ]; then
             DEVICE_DATA_FORMAT_SET_OUT="\
-[/dev/cdc-wdm1] Successfully set data format
+[$DEVICE] Successfully set data format
                         QoS flow header: no
                     Link layer protocol: '802-3'
        Uplink data aggregation protocol: 'disabled'
@@ -315,10 +322,23 @@ Downlink data aggregation max datagrams: '0'
     fi
 }
 
-# qmicli -d /dev/cdc-wdm0 --wds-start-network --client-no-release-cid
-# [/dev/cdc-wdm0] Network started
+# Valid options are
+# 'enabled' or 'disabled'
+set_auto_connect ()
+{
+    AUTOCONNECT=$1
+    qmicli -d $DEVICE  --wds-get-autoconnect-settings | grep "$AUTOCONNECT"
+    if [ $? -eq 0 ]; then
+        echo "Autoconnect alreay set to $AUTOCONNECT"
+    else
+        qmicli -d $DEVICE --wds-set-autoconnect-settings=$AUTOCONNECT
+    fi
+}
+
+# qmicli -d $DEVICE --wds-start-network --client-no-release-cid
+# [$DEVICE] Network started
 #   Packet data handle: 3634026241
-# [/dev/cdc-wdm0] Client ID not released:
+# [$DEVICE] Client ID not released:
 #   Service: 'wds'
 #       CID: '80'
 start_network ()
@@ -328,13 +348,24 @@ start_network ()
     fi
 
     if [ -n "$PDH" ]; then
-        echo "error: cannot re-start network, PDH already exists" 1>&2
+        echo "error: Cannot re-start network, PDH already exists" 1>&2
         exit 3
     fi
 
+    if [ -z "$APN" ]; then
+        echo "error: Missing APN settings" 1>&2
+        exit 1
+    fi
+
+    set_auto_connect disabled
+    for _ in $(seq 1 10); do /usr/bin/test -c $DEVICE && break; /bin/sleep 1; done
+    for _ in $(seq 1 10); do /usr/bin/qmicli -d $DEVICE --nas-get-signal-strength && break; /bin/sleep 1; done
+
+    echo Y > /sys/class/net/wwp1s0/qmi/raw_ip
+
     setup_data_format
 
-    START_NETWORK_ARGS="apn='$APN'"
+    START_NETWORK_ARGS="ip-type=4,apn='$APN'"
     if [ -n "$APN_USER" ]; then
         START_NETWORK_ARGS="${START_NETWORK_ARGS},username='$APN_USER'"
         if [ -n "$APN_PASS" ]; then
@@ -347,9 +378,9 @@ start_network ()
 
     if [ -n "$QMIDEBUG" ]; then
         START_NETWORK_OUT="\
-[/dev/cdc-wdm0] Network started
+[$DEVICE] Network started
         Packet data handle: '3634026241'
-[/dev/cdc-wdm0] Client ID not released:
+[$DEVICE] Client ID not released:
         Service: 'wds'
         CID: '80'"
     else
@@ -360,7 +391,7 @@ start_network ()
     if [ -z "$CID" ]; then
         CID=`echo "$START_NETWORK_OUT" | sed -n "s/.*CID.*'\(.*\)'.*/\1/p"`
         if [ -z "$CID" ]; then
-            echo "error: network start failed, client not allocated" 1>&2
+            echo "error: Network start failed, client not allocated" 1>&2
             exit 1
         else
             save_state "CID" $CID
@@ -369,7 +400,7 @@ start_network ()
 
     PDH=`echo "$START_NETWORK_OUT" | sed -n "s/.*handle.*'\(.*\)'.*/\1/p"`
     if [ -z "$PDH" ]; then
-        echo "error: network start failed, no packet data handle" 1>&2
+        echo "error: Network start failed, no packet data handle" 1>&2
         # Cleanup the client
         qmicli -d "$DEVICE" --wds-noop --client-cid="$CID" $PROXY_OPT
         clear_state
@@ -378,12 +409,15 @@ start_network ()
         save_state "PDH" $PDH
     fi
 
+    set_auto_connect enabled
     echo "Network started successfully"
 }
 
-# qmicli -d /dev/cdc-wdm0 --wds-stop-network
+# qmicli -d $DEVICE --wds-stop-network
 stop_network ()
 {
+    set_auto_connect disabled
+
     if [ -z "$CID" ]; then
         echo "Network already stopped"
     elif [ -z "$PDH" ]; then
@@ -396,7 +430,7 @@ stop_network ()
 
         if [ -n "$QMIDEBUG" ]; then
             STOP_NETWORK_OUT="\
-[/dev/cdc-wdm0] Network stopped
+[$DEVICE] Network stopped
 "
         else
             STOP_NETWORK_OUT=`$STOP_NETWORK_CMD`
@@ -408,7 +442,7 @@ stop_network ()
     clear_state
 }
 
-# qmicli -d /dev/cdc-wdm0 --wds-get-packet-service-status
+# qmicli -d $DEVICE --wds-get-packet-service-status
 packet_service_status ()
 {
     if [ -n "$CID" ]; then
@@ -420,7 +454,7 @@ packet_service_status ()
 
     if [ -n "$QMIDEBUG" ]; then
         STATUS_OUT="\
-[/dev/cdc-wdm0] Connection status: 'disconnected'
+[$DEVICE] Connection status: 'disconnected'
 "
     else
         STATUS_OUT=`$STATUS_CMD`
