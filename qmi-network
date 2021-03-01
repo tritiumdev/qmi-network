@@ -259,7 +259,7 @@ Downlink data aggregation max size: '0'"
 
     # Read link layer protocol setup in the kernel
 
-    EXPECTED_DATA_FORMAT_CMD="qmicli -d $DEVICE --get-expected-data-format"
+    EXPECTED_DATA_FORMAT_CMD="qmicli -d $DEVICE --get-expected-data-format $PROXY_OPT"
     echo "Getting expected data format with '$EXPECTED_DATA_FORMAT_CMD'..."
     if [ -n "$QMIDEBUG" ]; then
         EXPECTED_LLP="raw-ip"
@@ -311,7 +311,7 @@ Downlink data aggregation max datagrams: '0'
             echo "New device link layer protocol retrieved: $LLP"
         fi
     else
-        EXPECTED_DATA_FORMAT_SET_CMD="qmicli -d $DEVICE --set-expected-data-format=$DEVICE_LLP"
+        EXPECTED_DATA_FORMAT_SET_CMD="qmicli -d $DEVICE --set-expected-data-format=$DEVICE_LLP $PROXY_OPT"
         echo "Updating kernel link layer protocol with '$EXPECTED_DATA_FORMAT_SET_CMD'..."
         EXPECTED_DATA_FORMAT_SET_OUT=`$EXPECTED_DATA_FORMAT_SET_CMD`
         if [ $? -eq 0 ]; then
@@ -327,20 +327,20 @@ Downlink data aggregation max datagrams: '0'
 set_auto_connect ()
 {
     AUTOCONNECT=$1
-    qmicli -d $DEVICE  --wds-get-autoconnect-settings | grep "$AUTOCONNECT"
+    qmicli -d $DEVICE  --wds-get-autoconnect-settings $PROXY_OPT | grep "$AUTOCONNECT"
     if [ $? -eq 0 ]; then
         echo "Autoconnect alreay set to $AUTOCONNECT"
     else
-        qmicli -d $DEVICE --wds-set-autoconnect-settings=$AUTOCONNECT
+        qmicli -d $DEVICE --wds-set-autoconnect-settings=$AUTOCONNECT $PROXY_OPT
     fi
 }
 
 # qmicli -d $DEVICE --wds-start-network --client-no-release-cid
 # [$DEVICE] Network started
-#   Packet data handle: 3634026241
+#   Packet data handle: '$PDH'
 # [$DEVICE] Client ID not released:
 #   Service: 'wds'
-#       CID: '80'
+#       CID: '$CID'
 start_network ()
 {
     if [ -n "$CID" ]; then
@@ -359,7 +359,7 @@ start_network ()
 
     set_auto_connect disabled
     for _ in $(seq 1 10); do /usr/bin/test -c $DEVICE && break; /bin/sleep 1; done
-    for _ in $(seq 1 10); do /usr/bin/qmicli -d $DEVICE --nas-get-signal-strength && break; /bin/sleep 1; done
+    for _ in $(seq 1 10); do /usr/bin/qmicli -d $DEVICE --nas-get-signal-strength $PROXY_OPT && break; /bin/sleep 1; done
 
     echo Y > /sys/class/net/wwp1s0/qmi/raw_ip
 
@@ -379,10 +379,10 @@ start_network ()
     if [ -n "$QMIDEBUG" ]; then
         START_NETWORK_OUT="\
 [$DEVICE] Network started
-        Packet data handle: '3634026241'
+        Packet data handle: '$PDH'
 [$DEVICE] Client ID not released:
         Service: 'wds'
-        CID: '80'"
+        CID: '$CID'"
     else
         START_NETWORK_OUT=`$START_NETWORK_CMD`
     fi
